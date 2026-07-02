@@ -1,17 +1,42 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <!-- Firebase Compat SDK -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+  <!-- Firebase Compat SDK (loaded sequentially so `firebase` is guaranteed defined before use) -->
   <script>
-    firebase.initializeApp({
-      apiKey: "AIzaSyCuUWcDG33s2ggf8lhTPGTHnC9ZZqY22wg",
-      authDomain: "hookfinds-69c93.firebaseapp.com",
-      projectId: "hookfinds-69c93",
-      storageBucket: "hookfinds-69c93.firebasestorage.app",
-      messagingSenderId: "201916230471",
-      appId: "1:201916230471:web:dec00304c8d6c0c44e3a62"
+    window.firebaseReady = new Promise(function (resolve) {
+      function loadScript(src, onDone) {
+        var s = document.createElement('script');
+        s.src = src;
+        s.onload = onDone;
+        s.onerror = function () {
+          console.error('Failed to load Firebase script:', src);
+          resolve(false);
+        };
+        document.head.appendChild(s);
+      }
+      loadScript('https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js', function () {
+        loadScript('https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js', function () {
+          if (typeof firebase !== 'undefined') {
+            try {
+              firebase.initializeApp({
+                apiKey: "AIzaSyCuUWcDG33s2ggf8lhTPGTHnC9ZZqY22wg",
+                authDomain: "hookfinds-69c93.firebaseapp.com",
+                projectId: "hookfinds-69c93",
+                storageBucket: "hookfinds-69c93.firebasestorage.app",
+                messagingSenderId: "201916230471",
+                appId: "1:201916230471:web:dec00304c8d6c0c44e3a62"
+              });
+              resolve(true);
+            } catch (e) {
+              console.error('firebase.initializeApp error:', e);
+              resolve(false);
+            }
+          } else {
+            console.error('firebase is not defined after script load');
+            resolve(false);
+          }
+        });
+      });
     });
   </script>
 <meta charset="UTF-8">
@@ -128,7 +153,7 @@ body.ar .reel-caption{letter-spacing:0;font-size:11px;}
 .reel-play-icon{position:absolute;top:10px;right:10px;width:26px;height:26px;background:rgba(0,0,0,.55);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;}
 
 /* CAT GRID */
-.cat-grid-section{padding:20px 0 28px;}
+.cat-grid-section{padding:6px 0 28px;}
 .cat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;padding:0 16px;}
 @media(min-width:480px){.cat-grid{grid-template-columns:repeat(3,1fr);}}
 @media(min-width:1024px){.cat-grid{grid-template-columns:repeat(4,1fr);padding:0 24px;gap:16px;}}
@@ -431,7 +456,6 @@ body.ar .search-icon-btn{right:auto;left:8px;}
 
   <section class="reel-section">
     <div class="search-row">
-      <div class="section-title" data-en="Trending Now 🔥" data-ar="الأكثر تداولاً 🔥">Trending Now 🔥</div>
       <div class="search-wrap" id="searchWrap">
         <input class="search-input" id="searchInput" type="text"
           placeholder="Search..."
@@ -440,7 +464,6 @@ body.ar .search-icon-btn{right:auto;left:8px;}
         <button class="search-icon-btn" id="searchIconBtn" onclick="toggleSearch()" title="Search">🔍</button>
       </div>
     </div>
-    <div class="reel-scroll-wrap"><div class="reel-row" id="reelRow"></div></div>
   </section>
 
   <!-- SEARCH RESULTS -->
@@ -605,7 +628,6 @@ async function initFirebase() {
 }
 
 function renderAll() {
-  renderReels(currentCat);
   if (currentCat === 'all') renderProducts('all');
   else renderCatGrid(currentCat);
 }
@@ -673,7 +695,6 @@ function setLang(l) {
   document.documentElement.lang = l;
   document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.textContent.trim() === (l==='en'?'EN':'ع')));
   document.querySelectorAll('[data-en]').forEach(el => { el.textContent = l==='ar' ? el.dataset.ar : el.dataset.en; });
-  renderReels(currentCat);
   if (currentCat === 'all') renderProducts('all');
   else renderCatGrid(currentCat);
 }
@@ -693,7 +714,6 @@ function showPage(p) {
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.getElementById(p+'Page').classList.add('active');
   if (p==='home') {
-    renderReels(currentCat);
     const prodSec = document.getElementById('productsSection');
     const catSec  = document.getElementById('catGridSection');
     if (currentCat === 'all') {
@@ -722,7 +742,7 @@ function doLogin() {
     document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
     document.getElementById('adminPage').classList.add('active');
     pendingMedia=[]; renderMediaPreview();
-    renderAdminDashboard(); renderManageTable(); renderCatsTable(); renderAnalytics();
+    renderAdminDashboard(); renderManageTable(); renderCatsTable(); renderAnalytics(); populateCatDropdown();
     window.scrollTo(0,0);
   } else {
     document.getElementById('loginError').textContent = 'Incorrect password.';
@@ -764,6 +784,7 @@ function showPanel(name, btn) {
   if (name==='manageProducts') renderManageTable();
   if (name==='analytics') renderAnalytics();
   if (name==='categories') renderCatsTable();
+  if (name==='addProduct') populateCatDropdown();
   if (name==='social') renderSocialSettings();
   if (name==='subscribers') renderSubscribersPanel();
   if (name==='preview') updatePreview();
@@ -850,7 +871,6 @@ function filterCat(cat, el) {
   if (el) el.classList.add('active');
   const prodSec = document.getElementById('productsSection');
   const catSec  = document.getElementById('catGridSection');
-  renderReels(cat);
   if (cat === 'all') {
     renderProducts('all');
     prodSec.style.display = 'block';
@@ -888,53 +908,13 @@ function fixVideoBlobSrcs(container) {
   });
 }
 
-function renderReels(cat) {
-  cat = cat || 'all';
-  const captions = lang==='ar' ? REEL_CAPTIONS_AR : REEL_CAPTIONS_EN;
-  const pub = products
-    .filter(p=>p.status==='published' && (cat==='all'||p.cat===cat))
-    .sort((a,b)=>(clicks[b.id]||0)-(clicks[a.id]||0));
-  const row = document.getElementById('reelRow');
-  row.innerHTML = '';
-  if (!pub.length) {
-    row.innerHTML = `<div style="padding:20px;color:var(--muted);font-size:13px;white-space:nowrap;">${lang==='ar'?'لا منتجات هنا بعد':'No finds here yet.'}</div>`;
-    return;
-  }
-  pub.forEach((p, i) => {
-    const cover = getCoverSrc(p);
-    const div = document.createElement('div');
-    div.className = 'reel-card';
-    div.onclick = () => openModal(p, currentCat);
-    const caption = lang==='ar' && p.name_ar ? p.name_ar : captions[i%captions.length];
-    let mediaHtml = '';
-    if (cover) {
-      mediaHtml = cover.type==='video'
-        ? `<video data-b64src="${cover.dataUrl}" style="width:100%;height:100%;object-fit:cover;" muted playsinline autoplay loop></video>`
-        : `<img src="${cover.dataUrl}" alt="${pName(p)}" style="width:100%;height:100%;object-fit:cover;">`;
-    } else {
-      mediaHtml = `<span style="font-size:38px;">${p.emoji||CAT_EMOJIS[p.cat]||'✦'}</span>`;
-    }
-    div.innerHTML = `
-      <div class="reel-img-placeholder" style="position:relative;">${mediaHtml}</div>
-      ${hasVideo(p)?'<div class="reel-play-icon">▶</div>':''}
-      <div class="reel-overlay"></div>
-      <div class="reel-text">
-        <div class="reel-caption">${lang==='ar'&&p.name_ar?p.name_ar:p.name}</div>
-        <div class="reel-price-row">
-          <span class="reel-price">${p.price||''}</span>
-          <span class="reel-stars">${p.rating?renderStars(parseFloat(p.rating),9):''}</span>
-        </div>
-      </div>`;
-    row.appendChild(div);
-  });
-}
 
 // ══════════ RENDER ALL-PRODUCTS (horizontal per category) ══════════
 function renderProducts(cat) {
   const container = document.getElementById('productsSection');
   container.innerHTML = '';
   let hasAny = false;
-  categories.forEach(catObj => {
+  categories.filter(catObj => !catObj.hidden).forEach(catObj => {
     const c = catObj.id;
     const list = products
       .filter(p=>p.status==='published'&&p.cat===c)
@@ -994,11 +974,6 @@ function renderCatGrid(cat) {
   }
   const section = document.createElement('section');
   section.className = 'cat-grid-section';
-  const titleEl = document.createElement('div');
-  titleEl.className = 'section-title';
-  titleEl.style.padding = '0 16px';
-  titleEl.textContent = `${CAT_EMOJIS[cat]||''} ${catName(cat)}`;
-  section.appendChild(titleEl);
   const grid = document.createElement('div');
   grid.className = 'cat-grid';
   list.forEach(p => {
@@ -1606,7 +1581,6 @@ function saveProduct() {
   setTimeout(() => { const m=document.getElementById('saveMsg'); if(m) m.textContent=''; }, 3000);
   renderManageTable();
   renderAdminDashboard();
-  renderReels(currentCat);
   if (currentCat === 'all') renderProducts('all');
 }
 
@@ -1676,17 +1650,54 @@ function renderManageTable() {
   });
 }
 
+let _catDragSrcIdx = null;
+function catDragStart(e, i) {
+  _catDragSrcIdx = i;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', String(i)); } catch(err){}
+}
+function catDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+}
+function catDrop(e, i) {
+  e.preventDefault();
+  const from = _catDragSrcIdx;
+  const to = i;
+  _catDragSrcIdx = null;
+  if (from === null || from === undefined || from === to) return;
+  const moved = categories.splice(from, 1)[0];
+  categories.splice(to, 0, moved);
+  saveCats(); save();
+  renderCatsTable(); renderCatsBar(); populateCatDropdown(); renderAdminDashboard();
+  if (currentCat === 'all') renderProducts('all'); else renderCatGrid(currentCat);
+}
+
 function renderCatsTable() {
   const tbody = document.getElementById('catsTbody');
   if (!tbody) return;
   tbody.innerHTML = '';
   categories.forEach((cat,i) => {
     const count = products.filter(p=>p.cat===cat.id).length;
+    const isVisible = !cat.hidden;
     const tr=document.createElement('tr');
+    tr.draggable = true;
+    tr.ondragstart = (e)=>catDragStart(e,i);
+    tr.ondragover = catDragOver;
+    tr.ondrop = (e)=>catDrop(e,i);
     tr.innerHTML=`
+      <td style="cursor:grab;text-align:center;color:var(--muted);font-size:14px;user-select:none;" title="Drag to reorder">⋮⋮</td>
       <td><input class="cat-edit-input" value="${cat.emoji}" id="ce_emoji_${i}" style="width:44px;text-align:center;font-size:18px;" onchange="updateCatField(${i},'emoji',this.value)"></td>
+      <td style="min-width:150px;">
+        <select class="cat-edit-input" style="margin-bottom:5px;font-size:11px;padding:5px 8px;" onchange="updateCatField(${i},'iconType',this.value)">
+          <option value="emoji" ${cat.iconType!=='svg'?'selected':''}>Emoji icon</option>
+          <option value="svg" ${cat.iconType==='svg'?'selected':''}>Custom SVG icon</option>
+        </select>
+        <input class="cat-edit-input" value="${(cat.iconSvg||'').replace(/"/g,'&quot;')}" placeholder="SVG path (d=...)" style="font-size:10px;padding:5px 8px;" onchange="updateCatField(${i},'iconSvg',this.value)">
+      </td>
       <td><input class="cat-edit-input" value="${cat.name_en}" id="ce_en_${i}" style="min-width:110px;" onchange="updateCatField(${i},'name_en',this.value)"></td>
       <td><input class="cat-edit-input" value="${cat.name_ar}" id="ce_ar_${i}" style="min-width:110px;direction:rtl;" onchange="updateCatField(${i},'name_ar',this.value)"></td>
+      <td style="text-align:center;"><input type="checkbox" ${isVisible?'checked':''} title="Show on website" onchange="updateCatField(${i},'hidden',!this.checked)"></td>
       <td style="text-align:center;">${count}</td>
       <td><button class="btn-tbl del" onclick="deleteCategory('${cat.id.replace(/'/g,"\\'")}')" ${count>0?'title="Has products"':''}>Delete</button></td>`;
     tbody.appendChild(tr);
@@ -1705,6 +1716,7 @@ function updateCatField(i, field, val) {
   saveCats(); save();
   renderCatsBar();
   populateCatDropdown();
+  if (currentCat === 'all') renderProducts('all'); else renderCatGrid(currentCat);
 }
 
 function deleteCategory(id) {
@@ -1714,6 +1726,8 @@ function deleteCategory(id) {
   categories = categories.filter(c=>c.id!==id);
   saveCats();
   renderCatsTable(); renderCatsBar(); populateCatDropdown(); renderAdminDashboard();
+  if (currentCat === id) { filterCat('all', document.getElementById('catPill_all')); }
+  else if (currentCat === 'all') { renderProducts('all'); }
 }
 
 function addCategory() {
@@ -1722,12 +1736,13 @@ function addCategory() {
   const em = document.getElementById('newCatEmoji').value.trim() || '✦';
   if (!en) { alert('English name required'); return; }
   if (categories.find(c=>c.id===en)) { alert('Category already exists'); return; }
-  categories.push({id:en, emoji:em, name_en:en, name_ar:ar||en});
+  categories.push({id:en, emoji:em, name_en:en, name_ar:ar||en, hidden:false});
   saveCats();
   document.getElementById('newCatEn').value='';
   document.getElementById('newCatAr').value='';
   document.getElementById('newCatEmoji').value='';
   renderCatsTable(); renderCatsBar(); populateCatDropdown(); renderAdminDashboard();
+  if (currentCat === 'all') renderProducts('all'); else renderCatGrid(currentCat);
 }
 
 function renderAnalytics() {
@@ -1751,6 +1766,23 @@ function renderAnalytics() {
 
 
 // ══════════ RENDER CATS BAR (dynamic) ══════════
+// ══════════ CATEGORY ICON RESOLUTION (dynamic, admin-editable) ══════════
+// Legacy built-in icons kept as fallback defaults so existing categories keep
+// looking exactly the same unless an admin explicitly overrides the icon.
+const _LEGACY_CAT_SVGS={'Cute Finds':'M12 22c4.97 0 9-4.03 9-9-4.97 0-9 4.03-9 9zM5.6 10.25c0 1.38 1.12 2.5 2.5 2.5.53 0 1.01-.16 1.42-.44l-.02.19c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5l-.02-.19c.4.28.89.44 1.42.44 1.38 0 2.5-1.12 2.5-2.5 0-1.16-.79-2.13-1.86-2.42.13-.34.2-.72.2-1.11C16.84 5.28 15.56 4 14 4c-.8 0-1.53.33-2.05.87C11.53 4.33 10.8 4 10 4c-1.56 0-2.84 1.28-2.84 2.84 0 .39.07.77.2 1.11-1.07.29-1.86 1.26-1.86 2.42zM12 22c-4.97 0-9-4.03-9-9 4.97 0 9 4.03 9 9z','Viral Finds':'M12 2C9.3 2 7 4.3 7 7c0 1.9 1 3.7 2.5 4.7l.5.6V14h4v-1.7l.5-.6C16 10.7 17 8.9 17 7c0-2.7-2.3-5-5-5zm-1 14h2v1l-1 2-1-2v-1z','Kitchen Finds':'M8.5 2v7c0 1.7 1.3 3 3 3h1v10h2V12h1c1.7 0 3-1.3 3-3V2h-2v5h-1V2h-2v5h-1V2H8.5zM6 2L4 10c0 1.5 1 2.7 2 3.2V22h2V13.2C9 12.7 10 11.5 10 10L8 2H6z','Home Finds':'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z','Cleaning Finds':'M9.5 8.5L14 13c1.1-1.6 1-3.8-.2-5.3L17.5 4 16 2.5 12.3 6.2C10.8 5 8.6 5.1 7 6.2L5 4 3.5 5.5l2 2C4.4 9.8 4.5 12.3 6 13.8c1.5 1.5 3.7 1.9 5.7 1.2L15 18.5l1.5-1.5L13 13.7c.4-.9.5-1.8.3-2.7L9.5 8.5zM6 20l-1.5 1.5 1.4 1.4L7.4 21 6 20z','Gadgets':'M7 2v2H5C3.9 4 3 4.9 3 6v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-2V2h-2v2H9V2H7zm-2 4h14v14H5V6zm7 2c-2.2 0-4 1.8-4 4s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4zm0 2c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2z','Problem Solvers':'M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zm-1 14h2v2h-2v-2z','Car Finds':'M18.9 6H5.1C4 6 3.2 6.7 2.9 7.7L1 13v8h2v-1h16v1h2v-8l-1.9-5.3C18.8 6.7 18 6 18.9 6zM5 8h14l1.5 4H3.5L5 8zM5.5 17C4.7 17 4 16.3 4 15.5S4.7 14 5.5 14s1.5.7 1.5 1.5S6.3 17 5.5 17zm13 0c-.8 0-1.5-.7-1.5-1.5s.7-1.5 1.5-1.5 1.5.7 1.5 1.5-.7 1.5-1.5 1.5z','Under $25':'M17.6 5.8C17.3 5.3 16.7 5 16 5H5C3.9 5 3 5.9 3 7v10c0 1.1.9 2 2 2h11c.7 0 1.3-.3 1.6-.8L22 12l-4.4-6.2zM16 17H5V7h11l3.5 5L16 17zM11 13.5h2V15h-2zm0-6h2v4.5h-2z'};
+function getCatIconHtml(cat) {
+  if (cat.iconType === 'svg' && cat.iconSvg) {
+    return `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="${cat.iconSvg}"/></svg>`;
+  }
+  if (cat.iconType === 'emoji' && cat.emoji) {
+    return `<span style="font-size:18px;line-height:1;">${cat.emoji}</span>`;
+  }
+  const _legacy = _LEGACY_CAT_SVGS[cat.id];
+  return _legacy
+    ? `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="${_legacy}"/></svg>`
+    : `<span style="font-size:18px;line-height:1;">${cat.emoji||'✦'}</span>`;
+}
+
 function renderCatsBar() {
   const row = document.getElementById('catsRow');
   if (!row) return;
@@ -1761,13 +1793,11 @@ function renderCatsBar() {
     <span class="cat-label" data-en="All" data-ar="الكل">All</span>
   </div>`;
   let pills = allPill;
-  categories.forEach(cat => {
+  categories.filter(cat => !cat.hidden).forEach(cat => {
     const _fullLabel = lang==='ar' ? cat.name_ar : cat.name_en;
     const label = _fullLabel.split(' ')[0];
     const isActive = currentCat === cat.id ? ' active' : '';
-    const _svgs={'Viral Finds':'M12 2C9.3 2 7 4.3 7 7c0 1.9 1 3.7 2.5 4.7l.5.6V14h4v-1.7l.5-.6C16 10.7 17 8.9 17 7c0-2.7-2.3-5-5-5zm-1 14h2v1l-1 2-1-2v-1z','Kitchen Finds':'M8.5 2v7c0 1.7 1.3 3 3 3h1v10h2V12h1c1.7 0 3-1.3 3-3V2h-2v5h-1V2h-2v5h-1V2H8.5zM6 2L4 10c0 1.5 1 2.7 2 3.2V22h2V13.2C9 12.7 10 11.5 10 10L8 2H6z','Home Finds':'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z','Cleaning Finds':'M9.5 8.5L14 13c1.1-1.6 1-3.8-.2-5.3L17.5 4 16 2.5 12.3 6.2C10.8 5 8.6 5.1 7 6.2L5 4 3.5 5.5l2 2C4.4 9.8 4.5 12.3 6 13.8c1.5 1.5 3.7 1.9 5.7 1.2L15 18.5l1.5-1.5L13 13.7c.4-.9.5-1.8.3-2.7L9.5 8.5zM6 20l-1.5 1.5 1.4 1.4L7.4 21 6 20z','Gadgets':'M7 2v2H5C3.9 4 3 4.9 3 6v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-2V2h-2v2H9V2H7zm-2 4h14v14H5V6zm7 2c-2.2 0-4 1.8-4 4s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4zm0 2c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2z','Problem Solvers':'M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zm-1 14h2v2h-2v-2z','Car Finds':'M18.9 6H5.1C4 6 3.2 6.7 2.9 7.7L1 13v8h2v-1h16v1h2v-8l-1.9-5.3C18.8 6.7 18 6 18.9 6zM5 8h14l1.5 4H3.5L5 8zM5.5 17C4.7 17 4 16.3 4 15.5S4.7 14 5.5 14s1.5.7 1.5 1.5S6.3 17 5.5 17zm13 0c-.8 0-1.5-.7-1.5-1.5s.7-1.5 1.5-1.5 1.5.7 1.5 1.5-.7 1.5-1.5 1.5z','Under $25':'M17.6 5.8C17.3 5.3 16.7 5 16 5H5C3.9 5 3 5.9 3 7v10c0 1.1.9 2 2 2h11c.7 0 1.3-.3 1.6-.8L22 12l-4.4-6.2zM16 17H5V7h11l3.5 5L16 17zM11 13.5h2V15h-2zm0-6h2v4.5h-2z'};
-    const _svgPath = _svgs[cat.id];
-    const _inner = _svgPath ? `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="${_svgPath}"/></svg>` : `<span style="font-size:18px;line-height:1;">${cat.emoji}</span>`;
+    const _inner = getCatIconHtml(cat);
     pills += `<div class="cat-pill${isActive}" id="catPill_${CSS.escape(cat.id)}" onclick="filterCat('${cat.id.replace(/'/g,"\\'")}',this)">
       <div class="cat-circle">${_inner}</div>
       <span class="cat-label">${label}</span>
@@ -1882,7 +1912,7 @@ function deleteProduct(id) {
   products = products.filter(p => p.id !== id);
   localStorage.setItem('hf_products', JSON.stringify(products));
   deleteProductDb(id);
-  renderManageTable(); renderAdminDashboard(); renderReels(currentCat);
+  renderManageTable(); renderAdminDashboard();
   if (currentCat === 'all') renderProducts('all');
 }
 function toggleStatus(id) { const p=products.find(x=>x.id===id); if(p){p.status=p.status==='published'?'draft':'published'; save(); renderManageTable();} }
@@ -2045,15 +2075,17 @@ function fallbackToLocal() {
   products = JSON.parse(localStorage.getItem('hf_products') || '[]');
   clicks   = JSON.parse(localStorage.getItem('hf_clicks')   || '{}');
   if (!products.length) products = SEED_PRODUCTS;
-  renderCatsBar(); renderReels('all'); renderProducts('all'); renderFooterSocial();
+  renderCatsBar(); renderProducts('all'); renderFooterSocial();
 }
 
 // Auto-start — modules are deferred so DOM is always ready here
 // Use DOMContentLoaded as safety net but also try immediately
 function _startApp() {
-  initFirebase().catch(err => {
-    console.error('Firebase failed, using localStorage:', err);
-    fallbackToLocal();
+  Promise.resolve(window.firebaseReady).then(function () {
+    initFirebase().catch(err => {
+      console.error('Firebase failed, using localStorage:', err);
+      fallbackToLocal();
+    });
   });
 }
 if (document.readyState === 'loading') {
@@ -2554,9 +2586,6 @@ window.toggleStatus = typeof toggleStatus !== "undefined" ? toggleStatus : undef
               <label>Category *</label>
               <select id="fp-cat">
                 <option value="">Select category</option>
-                <option>Viral Finds</option><option>Kitchen Finds</option><option>Home Finds</option>
-                <option>Cleaning Finds</option><option>Gadgets</option><option>Problem Solvers</option>
-                <option>Car Finds</option><option>Under $25</option>
               </select>
             </div>
             <div class="form-row"><label>Emoji</label><input type="text" id="fp-emoji" placeholder="🧲" maxlength="4"></div>
@@ -2617,7 +2646,7 @@ window.toggleStatus = typeof toggleStatus !== "undefined" ? toggleStatus : undef
           <button class="btn-save" style="margin-top:12px;" onclick="addCategory()">+ Add Category</button>
         </div>
         <div class="admin-table-wrap">
-          <table class="admin-table"><thead><tr><th>Emoji</th><th>English</th><th>Arabic</th><th>Products</th><th>Action</th></tr></thead><tbody id="catsTbody"></tbody></table>
+          <table class="admin-table"><thead><tr><th></th><th>Emoji</th><th>Icon</th><th>English</th><th>Arabic</th><th>Show</th><th>Products</th><th>Action</th></tr></thead><tbody id="catsTbody"></tbody></table>
         </div>
       </div>
 

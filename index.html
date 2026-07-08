@@ -118,8 +118,10 @@ body.ar .hero-tag{letter-spacing:0;}
 
 /* CATS */
 .cats-bar{
+  position:-webkit-sticky;
   position:sticky;top:58px;z-index:90;
   padding:0;
+  width:100%;
 }
 .cats-scroll-wrap{position:relative;overflow:hidden;}
 .cats-scroll-wrap::after{content:'';position:absolute;top:0;right:0;bottom:0;width:48px;background:linear-gradient(to right,transparent,rgba(245,240,232,0.88));pointer-events:none;z-index:2;}

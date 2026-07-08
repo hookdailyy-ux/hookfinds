@@ -986,6 +986,7 @@ async function initFirebase() {
       snap => {
         products = snap.docs.map(d => ({ ...d.data(), id: d.id }));
         products.sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+        normalizeProducts();
         renderCatsBar();
         renderAll();
       },
@@ -2946,6 +2947,34 @@ document.getElementById('productsSection').style.display = 'block';
 document.getElementById('catGridSection').style.display   = 'none';
 
 // Fallback if Firebase fails
+// ══════════ PRODUCT DATA NORMALIZATION (safe migration for old/legacy product records) ══════════
+// Never deletes a product. Only fills in missing fields and repairs a `cat` that
+// points at a category which no longer exists, so old products keep displaying
+// correctly on their category page instead of silently disappearing.
+function normalizeProducts() {
+  if (!categories.length) return; // categories not loaded yet — nothing to validate against
+  const validCatIds = new Set(categories.map(c => c.id));
+  const fallbackCatId = categories[0].id;
+  let fixedCount = 0;
+  products.forEach(p => {
+    let changed = false;
+    if (p.status !== 'published' && p.status !== 'draft') { p.status = 'published'; changed = true; }
+    if (!Array.isArray(p.media)) { p.media = []; changed = true; }
+    if (!Array.isArray(p.tags)) { p.tags = []; changed = true; }
+    if (typeof p.coverIdx !== 'number') { p.coverIdx = 0; changed = true; }
+    if (!p.cat || !validCatIds.has(p.cat)) {
+      console.warn(`Product "${p.name}" (id ${p.id}) had an invalid/missing category ("${p.cat}") — reassigned to "${fallbackCatId}".`);
+      p.cat = fallbackCatId;
+      changed = true;
+    }
+    if (changed) fixedCount++;
+  });
+  if (fixedCount > 0) {
+    console.warn(`normalizeProducts: repaired ${fixedCount} legacy product record(s).`);
+    localStorage.setItem('hf_products', JSON.stringify(products));
+  }
+}
+
 function fallbackToLocal() {
   const storedProducts = localStorage.getItem('hf_products');
   products = storedProducts !== null ? JSON.parse(storedProducts) : SEED_PRODUCTS;
@@ -2953,6 +2982,7 @@ function fallbackToLocal() {
   collections = JSON.parse(localStorage.getItem('hf_collections') || 'null') || DEFAULT_COLLECTIONS;
   migrateCollectionsSchema();
   ensureHomeSections();
+  normalizeProducts();
   renderCatsBar(); renderFooterSocial(); renderHero(); renderCollections();
   if (currentPage === 'favorites') renderFavoritesPage();
   else if (currentPage === 'basket') renderBasketPage();

@@ -1008,7 +1008,7 @@ async function initFirebase() {
       ]);
       if (catDoc.exists && catDoc.data().list) categories = catDoc.data().list;
       if (socDoc.exists && socDoc.data().list) socialSettings = socDoc.data().list;
-      if (heroDoc.exists && heroDoc.data().list) heroImages = heroDoc.data().list;
+      if (heroDoc.exists && heroDoc.data().list) heroImages = normalizeHeroImagesFromFirestore(heroDoc.data().list);
       if (collDoc.exists && collDoc.data().list) collections = collDoc.data().list;
       if (homeSecDoc.exists && homeSecDoc.data().list) homeSections = homeSecDoc.data().list;
       if (storeLinkDoc.exists && typeof storeLinkDoc.data().url === 'string') storeLink = storeLinkDoc.data().url;
@@ -3438,6 +3438,39 @@ function heroTouchEnd(e) {
   heroTouchStartX = null;
 }
 
+// Build a strictly plain-JSON payload for Firestore — only primitive string/boolean/number
+// fields, never the internal working objects (which are fine for local rendering but must
+// never be handed to Firestore directly, in case anything non-serializable ever ends up on them).
+function sanitizeHeroImagesForFirestore(list) {
+  return (Array.isArray(list) ? list : []).map((h, i) => {
+    const urlVal = (h && typeof h.dataUrl === 'string') ? h.dataUrl
+                 : (h && typeof h.url === 'string') ? h.url
+                 : '';
+    const clean = {
+      url: urlVal,
+      enabled: !!(h && h.enabled !== false),
+      order: i,
+    };
+    if (h && typeof h.title === 'string' && h.title.trim()) clean.title = h.title.trim();
+    return clean;
+  }).filter(h => h.url); // drop any entry that has no real string image
+}
+
+// Convert Firestore's plain-JSON shape back into the internal shape the local
+// render/admin code already works with. Handles both the new {url,...} shape and
+// any older {dataUrl,...} records already saved before this fix.
+function normalizeHeroImagesFromFirestore(list) {
+  return (Array.isArray(list) ? list.slice() : [])
+    .sort((a,b) => (a && a.order || 0) - (b && b.order || 0))
+    .map((h, i) => ({
+      id: 'hero_' + i + '_' + Date.now(),
+      dataUrl: (h && (h.url || h.dataUrl)) || '',
+      enabled: !!(h && h.enabled !== false),
+      title: (h && h.title) || '',
+    }))
+    .filter(h => h.dataUrl);
+}
+
 function saveHeroImagesList() {
   try {
     localStorage.setItem('hf_hero', JSON.stringify(heroImages));
@@ -3446,7 +3479,9 @@ function saveHeroImagesList() {
     try { localStorage.removeItem('hf_hero'); } catch (e2) {}
   }
   if (typeof firebase === 'undefined') return;
-  firebase.firestore().collection('config').doc('hero').set({ list: heroImages }).catch(e => {
+  const sanitized = sanitizeHeroImagesForFirestore(heroImages);
+  console.log('Saving heroImages to Firestore (sanitized payload):', sanitized);
+  firebase.firestore().collection('config').doc('hero').set({ list: sanitized }).catch(e => {
     console.error('saveHeroImagesList Firestore error:', e);
     alert('⚠ Could not save Hero Images to the cloud database. Your change is only saved on this device.\n\nError: ' + e.message);
   });

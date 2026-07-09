@@ -1004,12 +1004,13 @@ async function initFirebase() {
     renderHero();
     renderCollections();
 
-    // 2. Real-time products listener
+    // 2. Real-time products listener (single efficient listener — no polling, no repeated reads)
     db.collection('products').onSnapshot(
       snap => {
         products = snap.docs.map(d => ({ ...d.data(), id: d.id }));
         products.sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
         normalizeProducts();
+        localStorage.setItem('hf_products', JSON.stringify(products)); // cache for instant paint next visit
         renderCatsBar();
         renderAll();
       },

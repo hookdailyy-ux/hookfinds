@@ -23,10 +23,11 @@
         document.head.appendChild(s);
       }
 
-      // Order matters for compat builds: app, then auth, then firestore.
+      // Order matters for compat builds: app, then auth, then firestore, then storage.
       loadScript('firebase-app-compat.js', function () {
         loadScript('firebase-auth-compat.js', function () {
           loadScript('firebase-firestore-compat.js', function () {
+            loadScript('firebase-storage-compat.js', function () {
             if (typeof window.firebase !== 'undefined') {
               try {
                 window.firebase.initializeApp({
@@ -46,6 +47,7 @@
               console.error('firebase is not defined after script load');
               resolve(false);
             }
+            });
           });
         });
       });
@@ -3438,45 +3440,6 @@ function heroTouchEnd(e) {
   heroTouchStartX = null;
 }
 
-// Build a strictly plain-JSON payload for Firestore — only primitive string/boolean/number
-// fields, never the internal working objects (which are fine for local rendering but must
-// never be handed to Firestore directly, in case anything non-serializable ever ends up on them).
-// Returns true if a value is safe to send to Firestore as-is (string/number/boolean/null).
-// Anything else (File, Blob, FileList, DOM elements/Image objects, functions, nested
-// objects/arrays, undefined) is NOT plain-serializable and must never reach Firestore.
-function isFirestorePlainValue(v) {
-  if (v === null) return true;
-  const t = typeof v;
-  return t === 'string' || t === 'number' || t === 'boolean';
-}
-
-// Build a strictly plain-JSON payload for Firestore. Inspects each hero entry field by
-// field — only string/number/boolean values are ever copied. Anything else (File, Blob,
-// FileList, HTMLImageElement/Image, functions, undefined, nested objects) is dropped.
-function sanitizeHeroImagesForFirestore(list) {
-  const arr = Array.isArray(list) ? list : [];
-  return arr.map((h, i) => {
-    if (!h || typeof h !== 'object') return null;
-    // The image itself must already be a final string URL/dataURL — never a File/Blob/etc.
-    let imageUrl = '';
-    if (typeof h.imageUrl === 'string') imageUrl = h.imageUrl;
-    else if (typeof h.dataUrl === 'string') imageUrl = h.dataUrl;
-    else if (typeof h.url === 'string') imageUrl = h.url;
-    // (If h.dataUrl/h.url/h.imageUrl is a File, Blob, FileList, or any object instead of a
-    // string, none of the branches above match, imageUrl stays '', and this entry gets
-    // dropped below — a File/Blob is never copied into the payload under any field name.)
-
-    const clean = {
-      id: (typeof h.id === 'string' && h.id) ? h.id : ('hero_' + i + '_' + Date.now()),
-      imageUrl: imageUrl,
-      enabled: isFirestorePlainValue(h.enabled) ? !!h.enabled : true,
-      order: (typeof h.order === 'number' && !isNaN(h.order)) ? h.order : i,
-      title: (typeof h.title === 'string') ? h.title.trim() : '',
-    };
-    return clean;
-  }).filter(h => h && typeof h.imageUrl === 'string' && h.imageUrl.length > 0);
-}
-
 // Convert Firestore's plain-JSON shape back into the internal shape the local
 // render/admin code already works with (dataUrl). Also accepts any older records
 // saved before this fix (which may have used `url` or `dataUrl` as the field name).
@@ -3492,7 +3455,7 @@ function normalizeHeroImagesFromFirestore(list) {
     .filter(h => h.dataUrl);
 }
 
-function saveHeroImagesList() {
+async function saveHeroImagesList() {
   try {
     localStorage.setItem('hf_hero', JSON.stringify(heroImages));
   } catch (e) {
@@ -3501,28 +3464,26 @@ function saveHeroImagesList() {
   }
   if (typeof firebase === 'undefined') return;
 
-  // Inspect the raw working array before touching it, exactly as requested —
-  // this is what makes any hidden non-serializable value visible in DevTools.
-  console.log('RAW heroImages before sanitize (JSON.stringify):', JSON.stringify(heroImages, null, 2));
-  console.log('RAW heroImages before sanitize (object):', heroImages);
-  heroImages.forEach((h, i) => {
-    if (!h || typeof h !== 'object') { console.warn(`heroImages[${i}] is not an object:`, h); return; }
-    Object.keys(h).forEach(key => {
-      const v = h[key];
-      if (!isFirestorePlainValue(v)) {
-        console.warn(`heroImages[${i}].${key} is NOT Firestore-safe (type: ${Object.prototype.toString.call(v)}):`, v);
-      }
-    });
-  });
+  console.log(heroImages);
 
-  const sanitized = sanitizeHeroImagesForFirestore(heroImages);
-  console.log('FINAL sanitized payload about to be sent to Firestore (list field):', JSON.stringify(sanitized, null, 2));
-  console.log('FINAL sanitized payload (object):', sanitized);
+  // Strict, literal sanitization: build brand-new plain objects field by field.
+  // Never spread/copy the original img object — only explicit primitive coercion.
+  const safeHeroImages = heroImages.map((img, index) => ({
+    id: String(img.id || (Date.now() + '-' + index)),
+    imageUrl: String(img.imageUrl || img.dataUrl || img.url || img.src || ''),
+    enabled: Boolean(img.enabled),
+    order: Number.isFinite(Number(img.order)) ? Number(img.order) : index,
+    title: String(img.title || ''),
+  })).filter(img => img.imageUrl);
 
-  firebase.firestore().collection('config').doc('hero').set({ list: sanitized }).catch(e => {
+  console.log('FINAL HERO FIRESTORE PAYLOAD', safeHeroImages);
+
+  try {
+    await firebase.firestore().collection('config').doc('hero').set({ list: safeHeroImages }, { merge: true });
+  } catch (e) {
     console.error('saveHeroImagesList Firestore error:', e);
     alert('⚠ Could not save Hero Images to the cloud database. Your change is only saved on this device.\n\nError: ' + e.message);
-  });
+  }
 }
 
 function addHeroImage(dataUrl) {
@@ -3537,11 +3498,19 @@ function addHeroImage(dataUrl) {
 function deleteHeroImage(id) {
   if (heroImages.length <= 1) { alert('Keep at least one hero image.'); return; }
   if (!confirm('Are you sure you want to delete this?')) return;
+  const removed = heroImages.find(h => h.id === id);
   heroImages = heroImages.filter(h => h.id !== id);
   saveHeroImagesList();
   renderHero();
   renderHeroAdminPreview();
   showAdminToast('Image deleted');
+  // Best-effort: also remove the file from Storage. Never blocks the UI removal above.
+  if (removed && removed.dataUrl && typeof firebase !== 'undefined' && firebase.storage &&
+      removed.dataUrl.indexOf('firebasestorage.googleapis.com') !== -1) {
+    firebase.storage().refFromURL(removed.dataUrl).delete().catch(e => {
+      console.warn('Could not delete old hero file from Storage (non-fatal):', e);
+    });
+  }
 }
 
 function toggleHeroImageEnabled(id, enabled) {
@@ -3599,15 +3568,30 @@ function renderHeroAdminPreview() {
   });
 }
 
-function handleHeroUpload(input) {
+async function handleHeroUpload(input) {
   const file = input.files && input.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    addHeroImage(e.target.result);
-  };
-  reader.readAsDataURL(file);
-  input.value = '';
+  input.value = ''; // clear immediately so the same file can be re-selected later if needed
+
+  const msg = document.getElementById('heroSaveMsg');
+  if (typeof firebase === 'undefined' || !firebase.storage) {
+    if (msg) msg.textContent = '';
+    alert('⚠ Could not reach Firebase Storage. Check your connection and try again.');
+    return;
+  }
+
+  if (msg) msg.textContent = 'Uploading…';
+  try {
+    const path = 'hero_images/' + Date.now() + '_' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storageRef = firebase.storage().ref(path);
+    const snapshot = await storageRef.put(file);          // 1 & 2: upload the file, wait for completion
+    const downloadUrl = await snapshot.ref.getDownloadURL(); // 3: get the real HTTPS URL
+    addHeroImage(downloadUrl);                             // 4: only the URL string is ever stored
+  } catch (e) {
+    console.error('Hero image upload to Storage failed:', e);
+    if (msg) msg.textContent = '';
+    alert('⚠ Could not upload the hero image to Firebase Storage.\n\nError: ' + e.message);
+  }
 }
 
 // ══════════ PREVIEW ══════════

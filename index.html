@@ -4,37 +4,49 @@
   <!-- Firebase Compat SDK (loaded sequentially so `firebase` is guaranteed defined before use) -->
   <script>
     window.firebaseReady = new Promise(function (resolve) {
-      function loadScript(src, onDone) {
+      var CDN_PRIMARY = 'https://www.gstatic.com/firebasejs/10.12.5/';
+      var CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/firebase@10.12.5/';
+
+      function loadScript(fileName, onDone, triedFallback) {
         var s = document.createElement('script');
-        s.src = src;
+        s.src = (triedFallback ? CDN_FALLBACK : CDN_PRIMARY) + fileName;
         s.onload = onDone;
         s.onerror = function () {
-          console.error('Failed to load Firebase script:', src);
-          resolve(false);
+          if (!triedFallback) {
+            console.warn('Primary CDN failed for ' + fileName + ', trying fallback mirror…');
+            loadScript(fileName, onDone, true);
+          } else {
+            console.error('Failed to load Firebase script (both CDNs):', fileName);
+            resolve(false);
+          }
         };
         document.head.appendChild(s);
       }
-      loadScript('https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js', function () {
-        loadScript('https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js', function () {
-          if (typeof firebase !== 'undefined') {
-            try {
-              firebase.initializeApp({
-                apiKey: "AIzaSyCuUWcDG33s2ggf8lhTPGTHnC9ZZqY22wg",
-                authDomain: "hookfinds-69c93.firebaseapp.com",
-                projectId: "hookfinds-69c93",
-                storageBucket: "hookfinds-69c93.firebasestorage.app",
-                messagingSenderId: "201916230471",
-                appId: "1:201916230471:web:dec00304c8d6c0c44e3a62"
-              });
-              resolve(true);
-            } catch (e) {
-              console.error('firebase.initializeApp error:', e);
+
+      // Order matters for compat builds: app, then auth, then firestore.
+      loadScript('firebase-app-compat.js', function () {
+        loadScript('firebase-auth-compat.js', function () {
+          loadScript('firebase-firestore-compat.js', function () {
+            if (typeof window.firebase !== 'undefined') {
+              try {
+                window.firebase.initializeApp({
+                  apiKey: "AIzaSyCuUWcDG33s2ggf8lhTPGTHnC9ZZqY22wg",
+                  authDomain: "hookfinds-69c93.firebaseapp.com",
+                  projectId: "hookfinds-69c93",
+                  storageBucket: "hookfinds-69c93.firebasestorage.app",
+                  messagingSenderId: "201916230471",
+                  appId: "1:201916230471:web:dec00304c8d6c0c44e3a62"
+                });
+                resolve(true);
+              } catch (e) {
+                console.error('firebase.initializeApp error:', e);
+                resolve(false);
+              }
+            } else {
+              console.error('firebase is not defined after script load');
               resolve(false);
             }
-          } else {
-            console.error('firebase is not defined after script load');
-            resolve(false);
-          }
+          });
         });
       });
     });
@@ -1086,8 +1098,11 @@ function pBtnText(p) { return (p && p.btnText && p.btnText.trim()) ? p.btnText.t
 function catName(c) { return lang==='ar' ? getCatAr(c) : c; }
 
 // ══════════ PASSWORD / AUTH ══════════
-const DEFAULT_PASS = 'rog 369';
-// Force reset to current default password
+// SECURITY NOTE: Admin access goes through real Firebase Authentication (see doLogin/
+// adminLogout below), not a local string comparison. ADMIN_EMAIL is just a fixed account
+// identifier, not a secret — the real credential is the password set in Firebase Console.
+const ADMIN_EMAIL = 'hookdailyy@gmail.com';
+const DEFAULT_PASS = 'rog 369'; // unused for security now — kept only so old localStorage values don't error elsewhere
 if (localStorage.getItem('hf_pass') && localStorage.getItem('hf_pass') !== DEFAULT_PASS) { localStorage.removeItem('hf_pass'); }
 function getPass() { return localStorage.getItem('hf_pass') || DEFAULT_PASS; }
 
@@ -1138,9 +1153,20 @@ function showLogin() {
   document.getElementById('loginOverlay').classList.remove('hidden');
 }
 
-function doLogin() {
+async function doLogin() {
   const val = document.getElementById('loginInput').value;
-  if (val === getPass()) {
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = 'Checking…';
+
+  // Wait for the SDK load attempt to finish (covers the case where the admin
+  // clicks Login while the scripts are still loading) before giving up.
+  const loaded = await Promise.resolve(window.firebaseReady);
+  if (!loaded || typeof window.firebase === 'undefined' || !window.firebase.auth) {
+    errEl.textContent = 'Could not reach the login service. Check your connection and try again.';
+    return;
+  }
+  try {
+    await firebase.auth().signInWithEmailAndPassword(ADMIN_EMAIL, val);
     document.getElementById('loginOverlay').classList.add('hidden');
     currentPage = 'admin';
     document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
@@ -1148,8 +1174,15 @@ function doLogin() {
     pendingMedia=[]; renderMediaPreview();
     renderAdminDashboard(); renderManageTable(); renderCatsTable(); renderAnalytics(); populateCatDropdown();
     window.scrollTo(0,0);
-  } else {
-    document.getElementById('loginError').textContent = 'Incorrect password.';
+  } catch (e) {
+    console.error('Admin login error:', e.code, e.message);
+    if (e.code === 'auth/network-request-failed') {
+      errEl.textContent = 'Network error reaching the login service. Check your connection and try again.';
+    } else if (e.code === 'auth/too-many-requests') {
+      errEl.textContent = 'Too many attempts. Please wait a moment and try again.';
+    } else {
+      errEl.textContent = 'Incorrect password.';
+    }
     document.getElementById('loginInput').value = '';
     document.getElementById('loginInput').focus();
   }
@@ -1160,21 +1193,33 @@ function adminLogout() {
   document.getElementById('adminPage').classList.remove('active');
   document.getElementById('homePage').classList.add('active');
   window.scrollTo(0,0);
+  if (typeof firebase !== 'undefined' && firebase.auth) {
+    firebase.auth().signOut().catch(()=>{});
+  }
 }
 
-function changePassword() {
+async function changePassword() {
   const current = document.getElementById('sp-current').value;
   const newPass = document.getElementById('sp-new').value.trim();
-  const confirm = document.getElementById('sp-confirm').value.trim();
+  const confirmPass = document.getElementById('sp-confirm').value.trim();
   const msg = document.getElementById('settingsMsg');
   msg.className = 'settings-msg';
-  if (current !== getPass()) { msg.className='settings-msg err'; msg.textContent='Current password is incorrect.'; return; }
   if (!newPass) { msg.className='settings-msg err'; msg.textContent='New password cannot be empty.'; return; }
-  if (newPass !== confirm) { msg.className='settings-msg err'; msg.textContent='Passwords do not match.'; return; }
-  localStorage.setItem('hf_pass', newPass);
-  ['sp-current','sp-new','sp-confirm'].forEach(id => document.getElementById(id).value='');
-  msg.className='settings-msg ok'; msg.textContent='✓ Password updated successfully.';
-  setTimeout(()=>msg.textContent='',3500);
+  if (newPass !== confirmPass) { msg.className='settings-msg err'; msg.textContent='Passwords do not match.'; return; }
+  if (typeof firebase === 'undefined' || !firebase.auth || !firebase.auth().currentUser) {
+    msg.className='settings-msg err'; msg.textContent='Not connected to the login service — please log out and back in, then try again.'; return;
+  }
+  try {
+    const cred = firebase.auth.EmailAuthProvider.credential(ADMIN_EMAIL, current);
+    await firebase.auth().currentUser.reauthenticateWithCredential(cred);
+    await firebase.auth().currentUser.updatePassword(newPass);
+    ['sp-current','sp-new','sp-confirm'].forEach(id => document.getElementById(id).value='');
+    msg.className='settings-msg ok'; msg.textContent='✓ Password updated successfully.';
+    setTimeout(()=>msg.textContent='',3500);
+  } catch (e) {
+    msg.className='settings-msg err';
+    msg.textContent = (e.code === 'auth/wrong-password') ? 'Current password is incorrect.' : ('Could not update password: ' + e.message);
+  }
 }
 function setNavActive(el) { document.querySelectorAll('.nav-links a').forEach(a=>a.classList.remove('active')); el.classList.add('active'); }
 function showPanel(name, btn) {

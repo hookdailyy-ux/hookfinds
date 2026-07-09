@@ -3439,7 +3439,12 @@ function heroTouchEnd(e) {
 }
 
 function saveHeroImagesList() {
-  localStorage.setItem('hf_hero', JSON.stringify(heroImages));
+  try {
+    localStorage.setItem('hf_hero', JSON.stringify(heroImages));
+  } catch (e) {
+    console.warn('Hero image local cache write failed (likely storage quota) — continuing to save to the cloud anyway:', e);
+    try { localStorage.removeItem('hf_hero'); } catch (e2) {}
+  }
   if (typeof firebase === 'undefined') return;
   firebase.firestore().collection('config').doc('hero').set({ list: heroImages }).catch(e => {
     console.error('saveHeroImagesList Firestore error:', e);

@@ -3441,30 +3441,51 @@ function heroTouchEnd(e) {
 // Build a strictly plain-JSON payload for Firestore — only primitive string/boolean/number
 // fields, never the internal working objects (which are fine for local rendering but must
 // never be handed to Firestore directly, in case anything non-serializable ever ends up on them).
+// Returns true if a value is safe to send to Firestore as-is (string/number/boolean/null).
+// Anything else (File, Blob, FileList, DOM elements/Image objects, functions, nested
+// objects/arrays, undefined) is NOT plain-serializable and must never reach Firestore.
+function isFirestorePlainValue(v) {
+  if (v === null) return true;
+  const t = typeof v;
+  return t === 'string' || t === 'number' || t === 'boolean';
+}
+
+// Build a strictly plain-JSON payload for Firestore. Inspects each hero entry field by
+// field — only string/number/boolean values are ever copied. Anything else (File, Blob,
+// FileList, HTMLImageElement/Image, functions, undefined, nested objects) is dropped.
 function sanitizeHeroImagesForFirestore(list) {
-  return (Array.isArray(list) ? list : []).map((h, i) => {
-    const urlVal = (h && typeof h.dataUrl === 'string') ? h.dataUrl
-                 : (h && typeof h.url === 'string') ? h.url
-                 : '';
+  const arr = Array.isArray(list) ? list : [];
+  return arr.map((h, i) => {
+    if (!h || typeof h !== 'object') return null;
+    // The image itself must already be a final string URL/dataURL — never a File/Blob/etc.
+    let imageUrl = '';
+    if (typeof h.imageUrl === 'string') imageUrl = h.imageUrl;
+    else if (typeof h.dataUrl === 'string') imageUrl = h.dataUrl;
+    else if (typeof h.url === 'string') imageUrl = h.url;
+    // (If h.dataUrl/h.url/h.imageUrl is a File, Blob, FileList, or any object instead of a
+    // string, none of the branches above match, imageUrl stays '', and this entry gets
+    // dropped below — a File/Blob is never copied into the payload under any field name.)
+
     const clean = {
-      url: urlVal,
-      enabled: !!(h && h.enabled !== false),
-      order: i,
+      id: (typeof h.id === 'string' && h.id) ? h.id : ('hero_' + i + '_' + Date.now()),
+      imageUrl: imageUrl,
+      enabled: isFirestorePlainValue(h.enabled) ? !!h.enabled : true,
+      order: (typeof h.order === 'number' && !isNaN(h.order)) ? h.order : i,
+      title: (typeof h.title === 'string') ? h.title.trim() : '',
     };
-    if (h && typeof h.title === 'string' && h.title.trim()) clean.title = h.title.trim();
     return clean;
-  }).filter(h => h.url); // drop any entry that has no real string image
+  }).filter(h => h && typeof h.imageUrl === 'string' && h.imageUrl.length > 0);
 }
 
 // Convert Firestore's plain-JSON shape back into the internal shape the local
-// render/admin code already works with. Handles both the new {url,...} shape and
-// any older {dataUrl,...} records already saved before this fix.
+// render/admin code already works with (dataUrl). Also accepts any older records
+// saved before this fix (which may have used `url` or `dataUrl` as the field name).
 function normalizeHeroImagesFromFirestore(list) {
   return (Array.isArray(list) ? list.slice() : [])
     .sort((a,b) => (a && a.order || 0) - (b && b.order || 0))
     .map((h, i) => ({
-      id: 'hero_' + i + '_' + Date.now(),
-      dataUrl: (h && (h.url || h.dataUrl)) || '',
+      id: (h && typeof h.id === 'string' && h.id) || ('hero_' + i + '_' + Date.now()),
+      dataUrl: (h && (h.imageUrl || h.url || h.dataUrl)) || '',
       enabled: !!(h && h.enabled !== false),
       title: (h && h.title) || '',
     }))
@@ -3479,8 +3500,25 @@ function saveHeroImagesList() {
     try { localStorage.removeItem('hf_hero'); } catch (e2) {}
   }
   if (typeof firebase === 'undefined') return;
+
+  // Inspect the raw working array before touching it, exactly as requested —
+  // this is what makes any hidden non-serializable value visible in DevTools.
+  console.log('RAW heroImages before sanitize (JSON.stringify):', JSON.stringify(heroImages, null, 2));
+  console.log('RAW heroImages before sanitize (object):', heroImages);
+  heroImages.forEach((h, i) => {
+    if (!h || typeof h !== 'object') { console.warn(`heroImages[${i}] is not an object:`, h); return; }
+    Object.keys(h).forEach(key => {
+      const v = h[key];
+      if (!isFirestorePlainValue(v)) {
+        console.warn(`heroImages[${i}].${key} is NOT Firestore-safe (type: ${Object.prototype.toString.call(v)}):`, v);
+      }
+    });
+  });
+
   const sanitized = sanitizeHeroImagesForFirestore(heroImages);
-  console.log('Saving heroImages to Firestore (sanitized payload):', sanitized);
+  console.log('FINAL sanitized payload about to be sent to Firestore (list field):', JSON.stringify(sanitized, null, 2));
+  console.log('FINAL sanitized payload (object):', sanitized);
+
   firebase.firestore().collection('config').doc('hero').set({ list: sanitized }).catch(e => {
     console.error('saveHeroImagesList Firestore error:', e);
     alert('⚠ Could not save Hero Images to the cloud database. Your change is only saved on this device.\n\nError: ' + e.message);

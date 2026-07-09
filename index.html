@@ -710,9 +710,15 @@ function buildHomeSectionsFromCategories() {
   }));
 }
 let homeSections = JSON.parse(localStorage.getItem('hf_homesections') || 'null');
-function saveHomeSections(){
+function saveHomeSectionsLocal(){
   localStorage.setItem('hf_homesections', JSON.stringify(homeSections));
-  if (typeof firebase === 'undefined') return;
+}
+function saveHomeSections(){
+  saveHomeSectionsLocal();
+  // Never attempt a cloud write unless a real, currently-signed-in admin session exists.
+  // This also means initialization/migration/sync (below) never triggers a permission error
+  // for logged-out visitors — only an explicit admin edit calls this with a real session.
+  if (typeof firebase === 'undefined' || !firebase.auth || !firebase.auth().currentUser) return;
   firebase.firestore().collection('config').doc('homeSections').set({list:homeSections}).catch(e => {
     console.error('saveHomeSections Firestore error:', e);
     alert('⚠ Could not save Home Page settings to the cloud database. Your change is only saved on this device.\n\nError: ' + e.message);
@@ -720,10 +726,13 @@ function saveHomeSections(){
 }
 // Call once categories are confirmed from their real source (Firestore or localStorage) —
 // builds Home sections from categories on first run, or just syncs additions/removals after that.
+// IMPORTANT: this only ever persists locally. It never auto-saves to Firestore — that only
+// happens when the admin explicitly edits something in the Home Page panel (see updateHomeSectionField
+// and the drag-reorder handler), which call saveHomeSections() directly on a real user action.
 function ensureHomeSections() {
   if (!homeSections) {
     homeSections = buildHomeSectionsFromCategories();
-    saveHomeSections();
+    saveHomeSectionsLocal();
   } else {
     syncHomeSectionsWithCategories();
   }
@@ -738,7 +747,7 @@ function syncHomeSectionsWithCategories() {
   });
   // Remove entries for categories that no longer exist
   homeSections = homeSections.filter(s => categories.find(cat => cat.id === s.catId));
-  saveHomeSections();
+  saveHomeSectionsLocal(); // local only — automatic sync never pushes to the cloud on its own
 }
 
 function renderCollections() {
@@ -4102,4 +4111,3 @@ window.toggleBasket = typeof toggleBasket !== "undefined" ? toggleBasket : undef
 </div>
 </body>
 </html>
-<!-- redeploy 2026 -->

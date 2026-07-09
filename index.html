@@ -55,7 +55,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HOOK FINDS — Things you didn't know you needed.</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;600&family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;600&family=Cairo:wght@300;400;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;600&family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet"></noscript>
 <style>
 :root {
   --cream:#F5F0E8; --beige:#EDE4D3; --warm-sand:#D4C5A9; --tan:#C4A882;
@@ -971,6 +973,23 @@ const SEED_PRODUCTS = [
 ];
 
 // ── FIREBASE DATA FUNCTIONS (use module-level _db directly) ──
+// Safely cache the current products list for instant paint on the next visit.
+// This must NEVER be able to throw or block anything — caching is a pure bonus,
+// never a requirement for the current render to succeed.
+function cacheProductsSafely() {
+  try {
+    localStorage.setItem('hf_products', JSON.stringify(products));
+  } catch (e) {
+    console.warn('Product cache write failed (likely storage quota) — clearing old cache and retrying once:', e);
+    try {
+      localStorage.removeItem('hf_products');
+      localStorage.setItem('hf_products', JSON.stringify(products));
+    } catch (e2) {
+      console.warn('Product cache still failed after clearing — skipping cache for this update. Live data on screen is unaffected.', e2);
+    }
+  }
+}
+
 async function initFirebase() {
   try {
     const db = firebase.firestore();
@@ -1010,9 +1029,12 @@ async function initFirebase() {
         products = snap.docs.map(d => ({ ...d.data(), id: d.id }));
         products.sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
         normalizeProducts();
-        localStorage.setItem('hf_products', JSON.stringify(products)); // cache for instant paint next visit
+        // Render the real, fresh data FIRST — this must always happen regardless of
+        // whether caching succeeds. Caching is a nice-to-have for next visit, never
+        // something that should be able to block showing real products right now.
         renderCatsBar();
         renderAll();
+        cacheProductsSafely();
       },
       err => { console.error('Firestore error:', err); fallbackToLocal(); }
     );
@@ -3028,13 +3050,24 @@ function normalizeProducts() {
   });
   if (fixedCount > 0) {
     console.warn(`normalizeProducts: repaired ${fixedCount} legacy product record(s).`);
-    localStorage.setItem('hf_products', JSON.stringify(products));
+    cacheProductsSafely();
   }
 }
 
 function fallbackToLocal() {
   const storedProducts = localStorage.getItem('hf_products');
-  products = storedProducts !== null ? JSON.parse(storedProducts) : SEED_PRODUCTS;
+  if (storedProducts !== null) {
+    try {
+      products = JSON.parse(storedProducts);
+      if (!Array.isArray(products)) throw new Error('cached products is not an array');
+    } catch (e) {
+      console.warn('Cached products data was invalid/corrupted — clearing it and using fresh seed data instead:', e);
+      localStorage.removeItem('hf_products');
+      products = SEED_PRODUCTS;
+    }
+  } else {
+    products = SEED_PRODUCTS;
+  }
   clicks   = JSON.parse(localStorage.getItem('hf_clicks')   || '{}');
   collections = JSON.parse(localStorage.getItem('hf_collections') || 'null') || DEFAULT_COLLECTIONS;
   migrateCollectionsSchema();

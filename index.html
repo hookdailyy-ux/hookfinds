@@ -184,6 +184,14 @@ body.ar .reel-caption{letter-spacing:0;font-size:11px;}
 .cat-grid{display:grid;grid-template-columns:repeat(2,1fr);grid-auto-rows:1fr;align-items:stretch;gap:12px;padding:0 16px;}
 @media(min-width:480px){.cat-grid{grid-template-columns:repeat(3,1fr);}}
 @media(min-width:1024px){.cat-grid{grid-template-columns:repeat(4,1fr);padding:0 24px;gap:16px;}}
+/* Home page sections only — horizontal carousel, never wraps to a second row.
+   Card widths mirror .cat-grid's column proportions at each breakpoint (2/3/4 visible),
+   so cards stay the exact same size as before, just arranged in a scrollable row. */
+.home-carousel-row{display:flex;gap:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;scroll-snap-type:x mandatory;scrollbar-width:none;-ms-overflow-style:none;padding:0 16px;}
+.home-carousel-row::-webkit-scrollbar{display:none;}
+.home-carousel-row .cat-grid-card{flex:0 0 calc(50% - 6px);scroll-snap-align:start;}
+@media(min-width:480px){.home-carousel-row .cat-grid-card{flex:0 0 calc(33.333% - 8px);}}
+@media(min-width:1024px){.home-carousel-row{padding:0 24px;gap:16px;} .home-carousel-row .cat-grid-card{flex:0 0 calc(25% - 12px);}}
 .cat-grid-card{background:transparent;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .22s;display:flex;flex-direction:column;height:100%;}
 .cat-grid-card:active{transform:scale(.98);}
 @media(hover:hover){.cat-grid-card:hover{transform:translateY(-3px);}}
@@ -716,6 +724,10 @@ function buildHomeSectionsFromCategories() {
 let homeSections = JSON.parse(localStorage.getItem('hf_homesections') || 'null');
 function saveHomeSectionsLocal(){
   localStorage.setItem('hf_homesections', JSON.stringify(homeSections));
+  // Notify any listener on this page (storefront) that homeSections changed, so it can
+  // re-render immediately without a manual refresh — regardless of whether the cloud
+  // write below succeeds, since the in-memory/local state is already current at this point.
+  window.dispatchEvent(new CustomEvent('homeSectionsUpdated', { detail: { homeSections } }));
 }
 function saveHomeSections(){
   saveHomeSectionsLocal();
@@ -728,6 +740,12 @@ function saveHomeSections(){
     alert('⚠ Could not save Home Page settings to the cloud database. Your change is only saved on this device.\n\nError: ' + e.message);
   });
 }
+
+// Storefront listener: whenever Home sections change (from any admin action, on this
+// same page), re-render the Home page immediately — no manual refresh needed.
+window.addEventListener('homeSectionsUpdated', function () {
+  if (typeof renderProducts === 'function') renderProducts('all');
+});
 // Call once categories are confirmed from their real source (Firestore or localStorage) —
 // builds Home sections from categories on first run, or just syncs additions/removals after that.
 // IMPORTANT: this only ever persists locally. It never auto-saves to Firestore — that only
@@ -1490,7 +1508,7 @@ function renderProducts(cat) {
       section.appendChild(subEl);
     }
     const grid = document.createElement('div');
-    grid.className = 'cat-grid';
+    grid.className = 'home-carousel-row';
     list.forEach(p => grid.appendChild(buildProductCard(p, 'all')));
     section.appendChild(grid);
     container.appendChild(section);
@@ -2287,7 +2305,8 @@ function catDrop(e, i) {
   categories.splice(to, 0, moved);
   saveCats(); save();
   renderCatsTable(); renderCatsBar(); populateCatDropdown(); renderAdminDashboard();
-  if (currentCat === 'all') renderProducts('all'); else renderCatGrid(currentCat);
+  renderProducts('all'); // always keep the Home page DOM current, regardless of what's currently visible
+  if (currentCat !== 'all') renderCatGrid(currentCat);
 }
 
 let selectedCategoryIds = new Set();
@@ -2355,7 +2374,7 @@ function bulkDeleteCategories() {
   selectedCategoryIds = new Set();
   renderCatsTable(); renderCatsBar(); populateCatDropdown(); renderAdminDashboard();
   if (ids.has(currentCat)) { filterCat('all', document.getElementById('catPill_all')); }
-  else if (currentCat === 'all') { renderProducts('all'); }
+  else { renderProducts('all'); }
   showAdminToast(`${count} categor${count===1?'y':'ies'} deleted.`);
 }
 
@@ -2371,7 +2390,8 @@ function updateCatField(i, field, val) {
   saveCats(); save();
   renderCatsBar();
   populateCatDropdown();
-  if (currentCat === 'all') renderProducts('all'); else renderCatGrid(currentCat);
+  renderProducts('all'); // always keep the Home page DOM current, regardless of what's currently visible
+  if (currentCat !== 'all') renderCatGrid(currentCat);
 }
 
 function showAdminToast(msg) {
@@ -2399,7 +2419,7 @@ function deleteCategory(id) {
   syncHomeSectionsWithCategories();
   renderCatsTable(); renderCatsBar(); populateCatDropdown(); renderAdminDashboard();
   if (currentCat === id) { filterCat('all', document.getElementById('catPill_all')); }
-  else if (currentCat === 'all') { renderProducts('all'); }
+  else { renderProducts('all'); }
   showAdminToast('Category deleted');
 }
 
@@ -2414,7 +2434,8 @@ function addCategory() {
   document.getElementById('newCatEn').value='';
   document.getElementById('newCatAr').value='';
   renderCatsTable(); renderCatsBar(); populateCatDropdown(); renderAdminDashboard();
-  if (currentCat === 'all') renderProducts('all'); else renderCatGrid(currentCat);
+  renderProducts('all'); // always keep the Home page DOM current, regardless of what's currently visible
+  if (currentCat !== 'all') renderCatGrid(currentCat);
 }
 
 let _collDragSrcIdx = null;
@@ -2645,7 +2666,7 @@ function homeSecDrop(e, i) {
   homeSections.splice(to, 0, moved);
   saveHomeSections();
   renderHomeSectionsTable();
-  if (currentCat === 'all') renderProducts('all');
+  renderProducts('all'); // always keep the Home page DOM current, regardless of what's currently visible
 }
 
 function renderHomeSectionsTable() {
@@ -2677,7 +2698,7 @@ function updateHomeSectionField(i, field, val) {
   if (!homeSections[i]) return;
   homeSections[i][field] = val;
   saveHomeSections();
-  if (currentCat === 'all') renderProducts('all');
+  renderProducts('all'); // always keep the Home page DOM current, regardless of what's currently visible
 }
 
 function renderAnalytics() {

@@ -721,6 +721,55 @@ function buildHomeSectionsFromCategories() {
     showSubtitle: true,
   }));
 }
+// ══════════ PER-CATEGORY PRODUCT ORDER (Admin → All Products drag-reorder) ══════════
+// { [catId]: [productId1, productId2, ...] } — the admin-defined display order for
+// that category's products. Used everywhere that category's products are shown:
+// the Home carousel, the full category page, and the Admin grouped list itself.
+let categoryOrders = JSON.parse(localStorage.getItem('hf_categoryOrders') || 'null') || {};
+function saveCategoryOrdersLocal() {
+  localStorage.setItem('hf_categoryOrders', JSON.stringify(categoryOrders));
+}
+function saveCategoryOrders() {
+  saveCategoryOrdersLocal();
+  if (typeof firebase === 'undefined' || !firebase.auth || !firebase.auth().currentUser) return;
+  firebase.firestore().collection('config').doc('categoryOrders').set({ data: categoryOrders }).catch(e => {
+    console.error('saveCategoryOrders Firestore error:', e);
+    alert('⚠ Could not save product ordering to the cloud database. Your change is only saved on this device.\n\nError: ' + e.message);
+  });
+}
+// Applies the saved order (if any) for a category to an already-filtered product list.
+// Products with no explicit position yet keep their existing relative order, at the end.
+function getOrderedProductsInCategory(catId, list) {
+  const order = categoryOrders[catId];
+  if (!order || !order.length) return list;
+  const orderIndex = new Map(order.map((id,i) => [id, i]));
+  return list.slice().sort((a, b) => {
+    const ai = orderIndex.has(a.id) ? orderIndex.get(a.id) : Infinity;
+    const bi = orderIndex.has(b.id) ? orderIndex.get(b.id) : Infinity;
+    return ai - bi;
+  });
+}
+// All products (any status) assigned to a category, in saved order — for the Admin grouped view.
+function getProductsForCategoryAdmin(catId) {
+  return getOrderedProductsInCategory(catId, products.filter(p => p.cat === catId));
+}
+// Move `draggedId` to sit exactly where `targetId` currently is, within one category only.
+function reorderProductInCategory(catId, draggedId, targetId) {
+  if (draggedId === targetId) return;
+  const list = getProductsForCategoryAdmin(catId).map(p => p.id);
+  const fromIdx = list.indexOf(draggedId);
+  if (fromIdx === -1) return;
+  list.splice(fromIdx, 1);
+  const toIdx = list.indexOf(targetId);
+  if (toIdx === -1) return;
+  list.splice(toIdx, 0, draggedId);
+  categoryOrders[catId] = list;
+  saveCategoryOrders();
+  renderManageTable();
+  renderProducts('all');
+  if (currentCat === catId) renderCatGrid(catId);
+}
+
 let homeSections = JSON.parse(localStorage.getItem('hf_homesections') || 'null');
 function saveHomeSectionsLocal(){
   localStorage.setItem('hf_homesections', JSON.stringify(homeSections));
@@ -1017,13 +1066,14 @@ async function initFirebase() {
     // 1. Load config (categories + social + hero + collections + homeSections + storeLink)
     //    and clicks — all independent reads, fetched concurrently instead of one-by-one
     try {
-      const [catDoc, socDoc, heroDoc, collDoc, homeSecDoc, storeLinkDoc, clickSnap] = await Promise.all([
+      const [catDoc, socDoc, heroDoc, collDoc, homeSecDoc, storeLinkDoc, catOrderDoc, clickSnap] = await Promise.all([
         db.collection('config').doc('categories').get(),
         db.collection('config').doc('social').get(),
         db.collection('config').doc('hero').get(),
         db.collection('config').doc('collections').get(),
         db.collection('config').doc('homeSections').get(),
         db.collection('config').doc('storeLink').get(),
+        db.collection('config').doc('categoryOrders').get(),
         db.collection('clicks').get(),
       ]);
       if (catDoc.exists && catDoc.data().list) categories = catDoc.data().list;
@@ -1032,6 +1082,7 @@ async function initFirebase() {
       if (collDoc.exists && collDoc.data().list) collections = collDoc.data().list;
       if (homeSecDoc.exists && homeSecDoc.data().list) homeSections = homeSecDoc.data().list;
       if (storeLinkDoc.exists && typeof storeLinkDoc.data().url === 'string') storeLink = storeLinkDoc.data().url;
+      if (catOrderDoc.exists && catOrderDoc.data().data) categoryOrders = catOrderDoc.data().data;
       clicks = {};
       clickSnap.docs.forEach(d => { clicks[d.id] = d.data().count || 0; });
     } catch(e) { console.warn('Config/clicks load:', e); }
@@ -1478,9 +1529,9 @@ function renderProducts(cat) {
     const catObj = categories.find(c => c.id === s.catId);
     if (!catObj) return;
     const c = s.catId;
-    const list = products
+    const list = getOrderedProductsInCategory(c, products
       .filter(p=>p.status==='published'&&p.cat===c)
-      .sort((a,b)=>(clicks[b.id]||0)-(clicks[a.id]||0));
+      .sort((a,b)=>(clicks[b.id]||0)-(clicks[a.id]||0)));
     if (!list.length) return;
     hasAny = true;
     const section = document.createElement('section');
@@ -1520,9 +1571,9 @@ function renderProducts(cat) {
 function renderCatGrid(cat) {
   const container = document.getElementById('catGridSection');
   container.innerHTML = '';
-  const list = products
+  const list = getOrderedProductsInCategory(cat, products
     .filter(p=>p.status==='published'&&p.cat===cat)
-    .sort((a,b)=>(clicks[b.id]||0)-(clicks[a.id]||0));
+    .sort((a,b)=>(clicks[b.id]||0)-(clicks[a.id]||0)));
   if (!list.length) {
     container.innerHTML = `<div style="text-align:center;padding:48px 20px;color:var(--muted);"><div style="font-size:36px;margin-bottom:10px;">🪄</div><p style="font-family:'Cormorant Garamond',serif;font-size:20px;color:var(--dark);">${lang==='ar'?'لا منتجات في هذه الفئة':'No finds in this category yet.'}</p></div>`;
     return;
@@ -2202,12 +2253,14 @@ function renderAdminDashboard() {
 }
 
 let selectedProductIds = new Set();
+let _manageDragSrc = null;
 function renderManageTable() {
-  const tbody = document.getElementById('manageTbody');
-  // Setup delegation once
-  if (tbody && !tbody._delegated) {
-    tbody._delegated = true;
-    tbody.addEventListener('click', function(e) {
+  const container = document.getElementById('manageProductsGrouped');
+  if (!container) return;
+  // Set up delegated listeners once, at the container level (covers every category group)
+  if (!container._delegated) {
+    container._delegated = true;
+    container.addEventListener('click', function(e) {
       const btn = e.target.closest('button[data-action]');
       if (!btn) return;
       const id = btn.dataset.id;
@@ -2216,20 +2269,72 @@ function renderManageTable() {
       if (action === 'toggle') toggleStatus(id);
       if (action === 'delete') deleteProduct(id);
     });
-    tbody.addEventListener('change', function(e) {
+    container.addEventListener('change', function(e) {
       const cb = e.target.closest('input[type="checkbox"][data-select-id]');
       if (!cb) return;
       toggleProductSelect(cb.dataset.selectId, cb.checked);
     });
   }
-  tbody.innerHTML = '';
-  if (!products.length) { tbody.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:28px;">No products yet.</td></tr>'; updateProductBulkBar(); return; }
-  products.forEach(p=>{
-    const tr=document.createElement('tr');
-    const checked = selectedProductIds.has(p.id);
-    tr.innerHTML=`<td style="text-align:center;"><input type="checkbox" data-select-id="${p.id}" ${checked?'checked':''}></td><td>${p.emoji||''} ${p.name}</td><td>${p.cat}</td><td>${p.price}</td><td>${clicks[p.id]||0}</td><td><span class="pub-badge ${p.status==='published'?'yes':'no'}">${p.status}</span></td><td><button class="btn-tbl edit" data-action="edit" data-id="${p.id}">Edit</button><button class="btn-tbl" data-action="toggle" data-id="${p.id}">Toggle</button><button class="btn-tbl del" data-action="delete" data-id="${p.id}">Delete</button></td>`;
-    tbody.appendChild(tr);
+  container.innerHTML = '';
+  if (!products.length) {
+    container.innerHTML = '<div style="text-align:center;color:var(--muted);padding:28px;">No products yet.</div>';
+    updateProductBulkBar();
+    return;
+  }
+  let anyGroup = false;
+  categories.forEach(cat => {
+    const list = getProductsForCategoryAdmin(cat.id);
+    if (!list.length) return;
+    anyGroup = true;
+
+    const groupWrap = document.createElement('div');
+    groupWrap.style.marginBottom = '28px';
+    const heading = document.createElement('div');
+    heading.style.cssText = "font-family:'Cormorant Garamond',serif;font-size:19px;font-weight:600;color:var(--dark);margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid var(--beige);";
+    heading.textContent = `${cat.emoji||''} ${cat.name_en} (${list.length})`;
+    groupWrap.appendChild(heading);
+
+    const tableWrap = document.createElement('div');
+    tableWrap.className = 'admin-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'admin-table';
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th></th><th style="text-align:center;"></th><th>Name</th><th>Price</th><th>Clicks</th><th>Status</th><th>Actions</th></tr>';
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+
+    list.forEach(p => {
+      const tr = document.createElement('tr');
+      tr.draggable = true;
+      tr.ondragstart = (e) => {
+        _manageDragSrc = { catId: cat.id, productId: p.id };
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', p.id); } catch(err){}
+      };
+      tr.ondragover = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+      tr.ondrop = (e) => {
+        e.preventDefault();
+        if (!_manageDragSrc || _manageDragSrc.catId !== cat.id) { _manageDragSrc = null; return; } // never move across categories
+        reorderProductInCategory(cat.id, _manageDragSrc.productId, p.id);
+        _manageDragSrc = null;
+      };
+      const checked = selectedProductIds.has(p.id);
+      tr.innerHTML = `
+        <td style="cursor:grab;text-align:center;color:var(--muted);font-size:14px;user-select:none;" title="Drag to reorder within ${cat.name_en}">⋮⋮</td>
+        <td style="text-align:center;"><input type="checkbox" data-select-id="${p.id}" ${checked?'checked':''}></td>
+        <td>${p.emoji||''} ${p.name}</td>
+        <td>${p.price}</td>
+        <td>${clicks[p.id]||0}</td>
+        <td><span class="pub-badge ${p.status==='published'?'yes':'no'}">${p.status}</span></td>
+        <td><button class="btn-tbl edit" data-action="edit" data-id="${p.id}">Edit</button><button class="btn-tbl" data-action="toggle" data-id="${p.id}">Toggle</button><button class="btn-tbl del" data-action="delete" data-id="${p.id}">Delete</button></td>`;
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+    groupWrap.appendChild(tableWrap);
+    container.appendChild(groupWrap);
   });
+  if (!anyGroup) container.innerHTML = '<div style="text-align:center;color:var(--muted);padding:28px;">No products yet.</div>';
   updateProductBulkBar();
 }
 function toggleProductSelect(id, checked) {
@@ -4001,9 +4106,10 @@ window.toggleBasket = typeof toggleBasket !== "undefined" ? toggleBasket : undef
           <button class="btn-tbl del" onclick="bulkDeleteProducts()">Delete Selected</button>
           <button class="btn-tbl" onclick="toggleSelectAllProducts(false)">Deselect All</button>
         </div>
-        <div class="admin-table-wrap">
-          <table class="admin-table"><thead><tr><th style="text-align:center;"><input type="checkbox" id="selectAllProducts" onchange="toggleSelectAllProducts(this.checked)"></th><th>Name</th><th>Category</th><th>Price</th><th>Clicks</th><th>Status</th><th>Actions</th></tr></thead><tbody id="manageTbody"></tbody></table>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:var(--muted);">
+          <input type="checkbox" id="selectAllProducts" onchange="toggleSelectAllProducts(this.checked)"> Select all products (across every category)
         </div>
+        <div id="manageProductsGrouped"></div>
       </div>
 
       <!-- CATEGORIES -->
